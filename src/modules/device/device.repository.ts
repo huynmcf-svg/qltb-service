@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, ilike, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, lt, or } from 'drizzle-orm';
 import {
   DEFAULT_PAGE_LIMIT,
   decodeCursor,
@@ -7,16 +7,22 @@ import {
   type CursorPage,
 } from '../../common/dto/pagination.dto';
 import { DRIZZLE, type Db } from '../../db/drizzle.module';
-import { device_categories, device_history, devices, type DeviceStatus } from '../../db/schema';
-import type { DeviceView, ListDevicesDto } from './dto/device.dto';
+import { device_quotas, devices, enterprises, warranties, type DeviceStatus } from '../../db/schema';
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+import type { DeviceDetailView, DeviceQuotaView, DeviceView, ListDevicesDto, WarrantyView } from './dto/device.dto';
 
 type DeviceRow = typeof devices.$inferSelect;
 type DeviceInsert = typeof devices.$inferInsert;
-type HistoryInsert = typeof device_history.$inferInsert;
+type QuotaRow = typeof device_quotas.$inferSelect;
+type WarrantyRow = typeof warranties.$inferSelect;
+
+/** Quá ngưỡng này kể từ `last_seen_at` thì coi là offline. Chưa chốt — 24 h. */
+export const OFFLINE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Truy vấn Drizzle cho cụm thiết bị. Không có nghiệp vụ ở đây — kiểm tra
- * chuyển trạng thái, map lỗi sang mã hợp đồng là việc của service.
+ * Truy vấn Drizzle cho thiết bị. Không có nghiệp vụ ở đây — kiểm tra chuyển
+ * trạng thái, map lỗi sang mã hợp đồng là việc của service.
  */
 @Injectable()
 export class DeviceRepository {
@@ -24,21 +30,23 @@ export class DeviceRepository {
 
   /**
    * Danh sách, cursor theo `(created_at DESC, device_id DESC)`.
-   *
-   * Lấy `limit + 1` dòng để biết còn trang sau hay không mà không cần COUNT.
+   * Lấy `limit + 1` dòng để biết còn trang sau mà không cần COUNT.
    */
-  async list(query: ListDevicesDto): Promise<CursorPage<DeviceView>> {
+  async list(query: ListDevicesDto, scope: string[] | null): Promise<CursorPage<DeviceView>> {
     const limit = query.limit ?? DEFAULT_PAGE_LIMIT;
     const cursor = query.cursor ? decodeCursor(query.cursor) : null;
 
     const conditions = [
+      // Phạm vi từ token đi TRƯỚC bộ lọc của client: `?enterprise_id=` chỉ thu hẹp thêm.
+      scope !== null ? inArray(devices.enterprise_id, scope.length ? scope : ['00000000-0000-0000-0000-000000000000']) : undefined,
+      query.enterprise_id ? eq(devices.enterprise_id, query.enterprise_id) : undefined,
+      query.device_type ? eq(devices.device_type, query.device_type) : undefined,
       query.status ? eq(devices.status, query.status) : undefined,
-      query.category_id ? eq(devices.category_id, query.category_id) : undefined,
       query.q
         ? or(
-            ilike(devices.code, `%${escapeLike(query.q)}%`),
-            ilike(devices.name, `%${escapeLike(query.q)}%`),
             ilike(devices.serial_number, `%${escapeLike(query.q)}%`),
+            ilike(devices.name, `%${escapeLike(query.q)}%`),
+            ilike(devices.model, `%${escapeLike(query.q)}%`),
           )
         : undefined,
       cursor
@@ -50,9 +58,9 @@ export class DeviceRepository {
     ].filter((c): c is NonNullable<typeof c> => c !== undefined);
 
     const rows = await this.db
-      .select({ device: devices, category_name: device_categories.name })
+      .select({ device: devices, enterprise_name: enterprises.name })
       .from(devices)
-      .innerJoin(device_categories, eq(devices.category_id, device_categories.category_id))
+      .leftJoin(enterprises, eq(devices.enterprise_id, enterprises.enterprise_id))
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(devices.created_at), desc(devices.device_id))
       .limit(limit + 1);
@@ -62,7 +70,7 @@ export class DeviceRepository {
     const last = page[page.length - 1];
 
     return {
-      items: page.map((r) => toView(r.device, r.category_name)),
+      items: page.map((r) => toView(r.device, r.enterprise_name)),
       next_cursor:
         hasMore && last
           ? encodeCursor({ ts: last.device.created_at.toISOString(), id: last.device.device_id })
@@ -72,73 +80,103 @@ export class DeviceRepository {
 
   async findById(device_id: string): Promise<DeviceView | null> {
     const rows = await this.db
-      .select({ device: devices, category_name: device_categories.name })
+      .select({ device: devices, enterprise_name: enterprises.name })
       .from(devices)
-      .innerJoin(device_categories, eq(devices.category_id, device_categories.category_id))
+      .leftJoin(enterprises, eq(devices.enterprise_id, enterprises.enterprise_id))
       .where(eq(devices.device_id, device_id))
       .limit(1);
     const row = rows[0];
-    return row ? toView(row.device, row.category_name) : null;
+    return row ? toView(row.device, row.enterprise_name) : null;
   }
 
-  async categoryExists(category_id: string): Promise<boolean> {
-    const rows = await this.db
-      .select({ one: sql<number>`1` })
-      .from(device_categories)
-      .where(eq(device_categories.category_id, category_id))
+  /** Chi tiết: máy + quota + bảo hành ACTIVE (partial unique nên tối đa một). */
+  async findDetailById(device_id: string): Promise<DeviceDetailView | null> {
+    const device = await this.findById(device_id);
+    if (!device) return null;
+
+    const [quota] = await this.db.select().from(device_quotas).where(eq(device_quotas.device_id, device_id)).limit(1);
+    const [warranty] = await this.db
+      .select()
+      .from(warranties)
+      .where(and(eq(warranties.device_id, device_id), eq(warranties.status, 'ACTIVE')))
       .limit(1);
-    return rows.length > 0;
+
+    return {
+      ...device,
+      quota: quota ? toQuotaView(quota) : emptyQuota(device_id, device.updated_at),
+      warranty: warranty ? toWarrantyView(warranty) : null,
+    };
   }
 
   /**
-   * Tạo thiết bị + dòng lịch sử REGISTER trong MỘT transaction. Lỗi unique
-   * (23505) để lọt lên cho service map sang DEVICE_CODE_CONFLICT.
+   * Nhập máy + tạo dòng `device_quotas` rỗng trong MỘT transaction. Lỗi unique
+   * (23505) để lọt lên cho service map sang DEVICE_SERIAL_CONFLICT.
    */
-  async create(input: DeviceInsert, history: Omit<HistoryInsert, 'device_id'>): Promise<DeviceRow> {
+  async create(input: DeviceInsert): Promise<DeviceRow> {
     return this.db.transaction(async (tx) => {
       const [row] = await tx.insert(devices).values(input).returning();
       if (!row) throw new Error('insert devices không trả về dòng nào');
-      await tx.insert(device_history).values({ ...history, device_id: row.device_id });
+      await tx.insert(device_quotas).values({ device_id: row.device_id });
       return row;
     });
   }
 
   async update(device_id: string, patch: Partial<DeviceInsert>): Promise<DeviceRow | null> {
-    const [row] = await this.db
-      .update(devices)
-      .set(patch)
-      .where(eq(devices.device_id, device_id))
-      .returning();
+    const [row] = await this.db.update(devices).set(patch).where(eq(devices.device_id, device_id)).returning();
     return row ?? null;
   }
 
   /**
-   * Chuyển trạng thái + ghi lịch sử trong MỘT transaction, có kiểm
-   * `from_status` ở WHERE để hai request song song không cùng thắng.
-   * Trả `null` nếu trạng thái hiện tại không còn là `from` — service coi đó là
-   * xung đột.
+   * Chuyển trạng thái có kiểm `from` ở WHERE để hai request song song không
+   * cùng thắng. Trả `null` nếu trạng thái hiện tại không còn là `from`.
+   * Ghi lịch sử / bảo hành / quota kèm theo là việc của service, trong cùng
+   * transaction — dùng `tx` truyền vào khi làm tới assign / unassign.
    */
   async transition(
     device_id: string,
     from: DeviceStatus,
     patch: Partial<DeviceInsert> & { status: DeviceStatus },
-    history: Omit<HistoryInsert, 'device_id' | 'from_status' | 'to_status'>,
   ): Promise<DeviceRow | null> {
-    return this.db.transaction(async (tx) => {
-      const [row] = await tx
-        .update(devices)
-        .set(patch)
-        .where(and(eq(devices.device_id, device_id), eq(devices.status, from)))
-        .returning();
-      if (!row) return null;
-      await tx.insert(device_history).values({
-        ...history,
-        device_id,
-        from_status: from,
-        to_status: patch.status,
-      });
-      return row;
+    return this.transitionTx(device_id, from, patch, this.db);
+  }
+
+  async transitionTx(device_id: string, from: DeviceStatus, patch: Partial<DeviceInsert> & { status: DeviceStatus }, tx: Tx | Db): Promise<DeviceRow | null> {
+    const [row] = await tx
+      .update(devices)
+      .set(patch)
+      .where(and(eq(devices.device_id, device_id), eq(devices.status, from)))
+      .returning();
+    return row ?? null;
+  }
+
+  get conn(): Db {
+    return this.db;
+  }
+
+  async findRaw(device_id: string): Promise<DeviceRow | null> {
+    const [row] = await this.db.select().from(devices).where(eq(devices.device_id, device_id)).limit(1);
+    return row ?? null;
+  }
+
+  async findByApiKeyHash(hash: string): Promise<DeviceRow | null> {
+    const [row] = await this.db.select().from(devices).where(eq(devices.api_key_hash, hash)).limit(1);
+    return row ?? null;
+  }
+
+  /** Xoá cứng máy + dòng quota. Lỗi FK (còn lịch sử) để lọt lên service. */
+  async hardDelete(device_id: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.delete(device_quotas).where(eq(device_quotas.device_id, device_id));
+      await tx.delete(devices).where(eq(devices.device_id, device_id));
     });
+  }
+
+  /** Job offline: máy đang gán, có last_seen_at, quá ngưỡng. */
+  async findStale(threshold: Date): Promise<DeviceRow[]> {
+    return this.db
+      .select()
+      .from(devices)
+      .where(and(inArray(devices.status, ['ACTIVE', 'LOCKED']), lt(devices.last_seen_at, threshold)));
   }
 }
 
@@ -147,22 +185,72 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
-export function toView(row: DeviceRow, category_name: string): DeviceView {
+export function toView(row: DeviceRow, enterprise_name: string | null, now = Date.now()): DeviceView {
   return {
     device_id: row.device_id,
-    code: row.code,
-    name: row.name,
-    category_id: row.category_id,
-    category_name,
-    brand: row.brand,
-    model: row.model,
     serial_number: row.serial_number,
+    device_type: row.device_type,
+    model: row.model,
+    name: row.name,
+    firmware_version: row.firmware_version,
+    enterprise_id: row.enterprise_id,
+    enterprise_name,
     status: row.status,
-    holder_name: row.holder_name,
-    holder_unit: row.holder_unit,
-    purchased_at: row.purchased_at,
-    warranty_until: row.warranty_until,
-    purchase_price: row.purchase_price,
+    sold_at: row.sold_at,
+    assigned_at: row.assigned_at?.toISOString() ?? null,
+    last_seen_at: row.last_seen_at?.toISOString() ?? null,
+    is_online: row.last_seen_at ? now - row.last_seen_at.getTime() < OFFLINE_AFTER_MS : false,
+    notes: row.notes,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at.toISOString(),
+  };
+}
+
+export function toQuotaView(row: QuotaRow): DeviceQuotaView {
+  return {
+    device_id: row.device_id,
+    quota_total: row.quota_total,
+    quota_used: row.quota_used,
+    quota_remaining: row.quota_remaining,
+    remaining_pct: row.quota_total > 0 ? Math.round((row.quota_remaining / row.quota_total) * 1000) / 10 : null,
+    warn_threshold_pct: row.warn_threshold_pct,
+    package_start_at: row.package_start_at?.toISOString() ?? null,
+    package_end_at: row.package_end_at?.toISOString() ?? null,
+    is_locked: row.is_locked,
+    locked_reason: row.locked_reason,
+    locked_at: row.locked_at?.toISOString() ?? null,
+    updated_at: row.updated_at.toISOString(),
+  };
+}
+
+function emptyQuota(device_id: string, updated_at: string): DeviceQuotaView {
+  return {
+    device_id,
+    quota_total: 0,
+    quota_used: 0,
+    quota_remaining: 0,
+    remaining_pct: null,
+    warn_threshold_pct: 20,
+    package_start_at: null,
+    package_end_at: null,
+    is_locked: false,
+    locked_reason: null,
+    locked_at: null,
+    updated_at,
+  };
+}
+
+export function toWarrantyView(row: WarrantyRow, now = new Date()): WarrantyView {
+  const end = new Date(`${row.end_date}T00:00:00Z`);
+  return {
+    warranty_id: row.warranty_id,
+    device_id: row.device_id,
+    enterprise_id: row.enterprise_id,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    status: row.status,
+    source: row.source,
+    days_remaining: Math.ceil((end.getTime() - now.getTime()) / 86_400_000),
     notes: row.notes,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),

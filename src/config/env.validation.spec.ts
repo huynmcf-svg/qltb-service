@@ -6,10 +6,21 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).toThrow(/DATABASE_URL/);
   });
 
-  it('nhận bộ DB_* rời', () => {
+  const db = { DB_HOST: 'localhost', DB_USER: 'qltb', DB_NAME: 'qltb' };
+  const secret = 'x'.repeat(32);
+
+  it('nhận bộ DB_* rời + JWT secret đủ dài', () => {
+    expect(() => validateEnv({ ...db, JWT_ACCESS_SECRET: secret })).not.toThrow();
+  });
+
+  it('chặn JWT secret ngắn', () => {
+    expect(() => validateEnv({ ...db, JWT_ACCESS_SECRET: 'ngan' })).toThrow(/32 ký tự/);
+  });
+
+  it('SameSite=none bắt buộc Secure', () => {
     expect(() =>
-      validateEnv({ DB_HOST: 'localhost', DB_USER: 'qltb', DB_NAME: 'qltb' }),
-    ).not.toThrow();
+      validateEnv({ ...db, JWT_ACCESS_SECRET: secret, REFRESH_COOKIE_SAMESITE: 'none', REFRESH_COOKIE_SECURE: 'false' }),
+    ).toThrow(/Secure/i);
   });
 });
 

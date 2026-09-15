@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { setupSwagger } from './swagger';
@@ -43,6 +44,9 @@ async function bootstrap() {
       referrerPolicy: { policy: 'no-referrer' },
     }),
   );
+
+  // Refresh token đi trong cookie httpOnly nên phải parse cookie.
+  app.use(cookieParser());
 
   /*
    * CORS. `CORS_ORIGINS=*` (mặc định dev) = mở cho MỌI origin: không trả `*`

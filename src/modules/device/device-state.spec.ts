@@ -1,26 +1,34 @@
 import { nextStatus } from './device-state';
 
 describe('máy trạng thái thiết bị', () => {
-  it('cấp phát chỉ từ IN_STOCK', () => {
-    expect(nextStatus('IN_STOCK', 'ASSIGN')).toBe('IN_USE');
-    expect(nextStatus('IN_USE', 'ASSIGN')).toBeNull();
-    expect(nextStatus('UNDER_MAINTENANCE', 'ASSIGN')).toBeNull();
+  it('gán chỉ từ IN_STOCK', () => {
+    expect(nextStatus('IN_STOCK', 'ASSIGN')).toBe('ACTIVE');
+    expect(nextStatus('ACTIVE', 'ASSIGN')).toBeNull();
+    expect(nextStatus('LOCKED', 'ASSIGN')).toBeNull();
   });
 
-  it('không thanh lý thẳng thiết bị đang IN_USE', () => {
-    expect(nextStatus('IN_USE', 'DISPOSE')).toBeNull();
-    expect(nextStatus('IN_STOCK', 'DISPOSE')).toBe('DISPOSED');
-    expect(nextStatus('UNDER_MAINTENANCE', 'DISPOSE')).toBe('DISPOSED');
+  it('thu hồi từ cả ACTIVE lẫn LOCKED về kho', () => {
+    expect(nextStatus('ACTIVE', 'UNASSIGN')).toBe('IN_STOCK');
+    expect(nextStatus('LOCKED', 'UNASSIGN')).toBe('IN_STOCK');
+    expect(nextStatus('IN_STOCK', 'UNASSIGN')).toBeNull();
   });
 
-  it('DISPOSED là trạng thái cuối', () => {
-    for (const action of ['ASSIGN', 'RETURN', 'MAINTENANCE_START', 'MAINTENANCE_END', 'DISPOSE'] as const) {
-      expect(nextStatus('DISPOSED', action)).toBeNull();
+  it('khoá / mở khoá chỉ khi đang gán', () => {
+    expect(nextStatus('ACTIVE', 'LOCK')).toBe('LOCKED');
+    expect(nextStatus('LOCKED', 'UNLOCK')).toBe('ACTIVE');
+    expect(nextStatus('IN_STOCK', 'LOCK')).toBeNull();
+  });
+
+  it('thanh lý chỉ từ kho, không thanh lý máy đang gán', () => {
+    expect(nextStatus('IN_STOCK', 'RETIRE')).toBe('RETIRED');
+    expect(nextStatus('ACTIVE', 'RETIRE')).toBeNull();
+  });
+
+  it('EXCHANGED và RETIRED là trạng thái cuối', () => {
+    for (const s of ['EXCHANGED', 'RETIRED'] as const) {
+      for (const a of ['ASSIGN', 'UNASSIGN', 'LOCK', 'UNLOCK', 'EXCHANGE', 'RETIRE'] as const) {
+        expect(nextStatus(s, a)).toBeNull();
+      }
     }
-  });
-
-  it('bảo trì xong về kho, không về tay người giữ cũ', () => {
-    expect(nextStatus('IN_USE', 'MAINTENANCE_START')).toBe('UNDER_MAINTENANCE');
-    expect(nextStatus('UNDER_MAINTENANCE', 'MAINTENANCE_END')).toBe('IN_STOCK');
   });
 });

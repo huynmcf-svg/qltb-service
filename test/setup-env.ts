@@ -16,3 +16,6 @@ if (process.env.RUN_DB_TESTS === '1') {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('dotenv').config();
 }
+// Auth: secret cố định cho test, không phải giá trị của môi trường nào.
+process.env.JWT_ACCESS_SECRET ??= 'test-only-secret-khong-dung-o-dau-khac-32+';
+process.env.REFRESH_COOKIE_SECURE ??= 'false';

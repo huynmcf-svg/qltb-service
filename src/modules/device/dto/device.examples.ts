@@ -1,39 +1,83 @@
 import { EX } from '../../../common/swagger/example-values';
-import type { DeviceView } from './device.dto';
+import type { DeviceDetailView, DeviceView } from './device.dto';
 
 /**
  * Ví dụ Swagger của module device. Cùng MỘT thiết bị xuyên suốt các endpoint
  * để người đọc lần theo được.
  */
 export const EXAMPLE_CREATE_DEVICE = {
-  code: 'LT-0001',
-  name: 'Laptop Dell Latitude 5540',
-  category_id: EX.category_id,
-  brand: 'Dell',
-  model: 'Latitude 5540',
-  serial_number: '5CG3210XYZ',
-  purchased_at: '2026-01-15',
-  warranty_until: '2029-01-15',
-  purchase_price: 25_000_000,
+  serial_number: EX.serial_number,
+  device_type: 'SIGNPAD',
+  model: 'SP-200',
+  name: 'Máy ký số quầy 1',
+  firmware_version: '1.4.2',
 } as const;
 
+/** Vừa nhập kho — chưa gán, quota rỗng. */
 export const EXAMPLE_DEVICE: DeviceView = {
   device_id: EX.device_id,
   ...EXAMPLE_CREATE_DEVICE,
-  category_name: 'Laptop',
+  enterprise_id: null,
+  enterprise_name: null,
   status: 'IN_STOCK',
-  holder_name: null,
-  holder_unit: null,
+  sold_at: null,
+  assigned_at: null,
+  last_seen_at: null,
+  is_online: false,
   notes: null,
   created_at: EX.earlier,
   updated_at: EX.now,
 };
 
+/** Cùng máy đó sau khi đã gán cho doanh nghiệp và đang chạy. */
+export const EXAMPLE_DEVICE_ACTIVE: DeviceView = {
+  ...EXAMPLE_DEVICE,
+  enterprise_id: EX.enterprise_id,
+  enterprise_name: EX.enterprise_name,
+  status: 'ACTIVE',
+  sold_at: '2026-01-15',
+  assigned_at: '2026-01-15T03:00:00.000Z',
+  last_seen_at: EX.now,
+  is_online: true,
+};
+
+export const EXAMPLE_DEVICE_DETAIL: DeviceDetailView = {
+  ...EXAMPLE_DEVICE_ACTIVE,
+  quota: {
+    device_id: EX.device_id,
+    quota_total: 10_000,
+    quota_used: 8_250,
+    quota_remaining: 1_750,
+    remaining_pct: 17.5,
+    warn_threshold_pct: 20,
+    package_start_at: '2026-01-15T00:00:00.000Z',
+    package_end_at: '2027-01-15T00:00:00.000Z',
+    is_locked: false,
+    locked_reason: null,
+    locked_at: null,
+    updated_at: EX.now,
+  },
+  warranty: {
+    warranty_id: EX.warranty_id,
+    device_id: EX.device_id,
+    enterprise_id: EX.enterprise_id,
+    start_date: '2026-01-15',
+    end_date: '2027-01-15',
+    status: 'ACTIVE',
+    source: 'SALE',
+    days_remaining: 122,
+    notes: null,
+    created_at: EX.earlier,
+    updated_at: EX.earlier,
+  },
+};
+
 export const EXAMPLE_UPDATE_DEVICE = {
-  notes: 'Đã thay pin tháng 8/2026',
+  firmware_version: '1.5.0',
+  notes: 'Đã cập nhật firmware tháng 9/2026',
 } as const;
 
 export const EXAMPLE_DEVICE_PAGE = {
-  items: [EXAMPLE_DEVICE],
+  items: [EXAMPLE_DEVICE_ACTIVE, EXAMPLE_DEVICE],
   next_cursor: EX.cursor,
 };

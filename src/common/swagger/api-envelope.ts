@@ -99,3 +99,54 @@ export function ApiNotFoundError(resource: string) {
 }
 
 const EXAMPLE_REQUEST_ID = 'a3f1c9e4-7b62-4d18-9f03-2c5e81aa4d77';
+
+/** Bộ lỗi mà **mọi** endpoint cần token đều trả được. Khai một lần, không ai quên. */
+export function ApiAuthErrors() {
+  return applyDecorators(
+    ApiEnvelopeError({
+      status: 401,
+      code: 'AUTHENTICATION_FAILED',
+      message: 'Access token không hợp lệ hoặc đã hết hạn',
+      description:
+        'Thiếu token, token sai chữ ký, token hết hạn, hoặc tài khoản không còn hiệu lực. ' +
+        'Web gọi `POST /auth/refresh-token` MỘT lần rồi thử lại; vẫn 401 thì về màn đăng nhập.',
+    }),
+    ApiEnvelopeError({
+      status: 403,
+      code: 'AUTHORIZATION_FAILED',
+      message: 'Không đủ quyền thực hiện thao tác này',
+      description:
+        'Token hợp lệ nhưng vai trò thiếu quyền. `details.missing_permissions` nêu rõ quyền còn thiếu.',
+      details: { required_permissions: ['device.create'], missing_permissions: ['device.create'] },
+    }),
+  );
+}
+
+/** Lỗi của endpoint bắt buộc `Idempotency-Key` (`@SideEffect`). */
+export function ApiIdempotencyErrors() {
+  return applyDecorators(
+    ApiEnvelopeError({
+      status: 400,
+      code: 'INVALID_PAYLOAD',
+      message: 'Thiếu header Idempotency-Key',
+      description: 'Mọi POST có side effect đều bắt buộc header này. Một lần bấm sinh một key.',
+      details: { header: 'Idempotency-Key' },
+    }),
+    ApiEnvelopeError({
+      status: 409,
+      code: 'IDEMPOTENCY_KEY_CONFLICT',
+      message: 'Idempotency-Key đã dùng với body khác',
+      description: 'Cùng key + **cùng** body thì trả lại kết quả cũ. Cùng key + **khác** body mới là 409.',
+    }),
+  );
+}
+
+/** 409 xung đột trạng thái — máy trạng thái từ chối. */
+export function ApiStateConflict(code: string, message: string, description: string, details: Record<string, unknown> = {}) {
+  return ApiEnvelopeError({ status: 409, code, message, description, details });
+}
+
+/** 422 vi phạm nghiệp vụ. */
+export function ApiUnprocessable(code: string, message: string, description: string, details: Record<string, unknown> = {}) {
+  return ApiEnvelopeError({ status: 422, code, message, description, details });
+}

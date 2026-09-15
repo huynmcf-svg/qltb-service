@@ -65,8 +65,9 @@ describe('tài liệu Swagger', () => {
     for (const { method, path, op } of operations()) {
       for (const [status, response] of Object.entries(op.responses ?? {})) {
         if (!status.startsWith('2') || status === '204') continue;
-        const content = (response as { content?: Record<string, { example?: unknown }> }).content;
-        const example = content?.['application/json']?.example;
+        const content = (response as { content?: Record<string, { example?: unknown }> }).content ?? {};
+        // Endpoint trả FILE (báo cáo) khai content-type khác JSON — ví dụ là mô tả file, chấp nhận.
+        const example = Object.values(content).find((c) => c.example !== undefined)?.example;
         if (example === undefined) missing.push(`${method.toUpperCase()} ${path} → ${status}`);
       }
     }

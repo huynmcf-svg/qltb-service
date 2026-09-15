@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
+import type { AuthenticatedUser } from './auth/authenticated-user';
 
 /**
  * Những gì service gắn thêm vào request. Khai một chỗ để không ai phải
- * `(req as any)` rải rác. Khi có auth, `auth_user` sẽ thêm vào đây.
+ * `(req as any)` rải rác.
  */
 export interface RequestContext extends Request {
   request_id: string;
+  /** Có sau khi qua `AccessTokenGuard`. Endpoint @Public thì không có. */
+  auth_user?: AuthenticatedUser;
 }
 
 /** `request_id` đi vào cả envelope response lẫn mọi dòng log của request đó. */
@@ -27,4 +30,14 @@ export function getClientIp(req: Request): string | undefined {
     return forwarded.split(',')[0]!.trim();
   }
   return req.ip ?? req.socket?.remoteAddress ?? undefined;
+}
+
+export function getUserAgent(req: Request): string | undefined {
+  const ua = req.headers['user-agent'];
+  return typeof ua === 'string' ? ua.slice(0, 512) : undefined;
+}
+
+/** Bộ ba request_id / ip / user-agent cho audit — dùng ở mọi controller. */
+export function requestMeta(req: Request): { request_id: string; ip?: string; user_agent?: string } {
+  return { request_id: ensureRequestId(req), ip: getClientIp(req), user_agent: getUserAgent(req) };
 }

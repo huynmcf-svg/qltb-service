@@ -8,6 +8,23 @@ export interface AppConfig {
   database: { url: string; poolMax: number; connectTimeoutMs: number };
   corsOrigins: string[];
   swagger: { enabled: boolean };
+  /** Giờ. Quá ngưỡng kể từ `last_seen_at` thì máy coi là offline (cảnh báo DEVICE_OFFLINE). */
+  deviceOfflineAfterHours: number;
+  auth: {
+    accessSecret: string;
+    /** Giây. ~15 phút. */
+    accessTtlSeconds: number;
+    /** Giây. 7 ngày; xoay sau mỗi lần dùng. */
+    refreshTtlSeconds: number;
+    issuer: string;
+    cookieName: string;
+    cookieSecure: boolean;
+    cookieSameSite: 'lax' | 'strict' | 'none';
+    /** Cookie refresh chỉ đính kèm cho nhánh /auth. */
+    cookiePath: string;
+    maxFailedLogins: number;
+    lockDurationSeconds: number;
+  };
 }
 
 const int = (value: string | undefined, fallback: number): number => {
@@ -61,5 +78,20 @@ export const configuration = (): AppConfig => ({
     .filter(Boolean),
   swagger: {
     enabled: resolveSwaggerEnabled(process.env),
+  },
+  deviceOfflineAfterHours: int(process.env.DEVICE_OFFLINE_AFTER_HOURS, 24),
+  auth: {
+    accessSecret: process.env.JWT_ACCESS_SECRET ?? '',
+    accessTtlSeconds: int(process.env.JWT_ACCESS_TTL_SECONDS, 900),
+    refreshTtlSeconds: int(process.env.REFRESH_TTL_SECONDS, 604_800),
+    issuer: process.env.JWT_ISSUER ?? 'qltb-service',
+    cookieName: process.env.REFRESH_COOKIE_NAME ?? 'qltb_rt',
+    // Dev chạy http://localhost nên Secure phải tắt được, nếu không trình duyệt
+    // bỏ cookie đi và không ai hiểu vì sao refresh luôn 401.
+    cookieSecure: (process.env.REFRESH_COOKIE_SECURE ?? 'true') !== 'false',
+    cookieSameSite: (process.env.REFRESH_COOKIE_SAMESITE as 'lax' | 'strict' | 'none') ?? 'lax',
+    cookiePath: process.env.REFRESH_COOKIE_PATH ?? '/api/v1/auth',
+    maxFailedLogins: int(process.env.AUTH_MAX_FAILED_LOGINS, 5),
+    lockDurationSeconds: int(process.env.AUTH_LOCK_DURATION_SECONDS, 900),
   },
 });
