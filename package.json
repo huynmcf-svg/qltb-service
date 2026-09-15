@@ -2,6 +2,9 @@
   "name": "qltb-service",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "nest build",
     "start": "nest start",
@@ -11,6 +14,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:db": "RUN_DB_TESTS=1 jest --runInBand",
+    "db:setup": "./scripts/db-setup.sh",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node -r ts-node/register/transpile-only -r dotenv/config src/db/migrate.ts",
     "db:seed": "node -r ts-node/register/transpile-only -r dotenv/config src/db/seed.ts"

@@ -44,10 +44,15 @@ async function bootstrap() {
     }),
   );
 
-  // CORS phải liệt kê origin cụ thể — sau này có cookie thì trình duyệt từ
-  // chối `credentials: include` với `Access-Control-Allow-Origin: *`.
+  /*
+   * CORS. `CORS_ORIGINS=*` (mặc định dev) = mở cho MỌI origin: không trả `*`
+   * thô mà phản chiếu lại origin của request (`origin: true`), vì trình duyệt
+   * từ chối `credentials: include` khi header là `*` — sau này có cookie auth
+   * vẫn chạy. Production liệt kê origin cụ thể, ngăn cách bằng dấu phẩy.
+   */
+  const corsOrigins = config.getOrThrow<string[]>('corsOrigins');
   app.enableCors({
-    origin: config.getOrThrow<string[]>('corsOrigins'),
+    origin: corsOrigins.includes('*') ? true : corsOrigins,
     credentials: true,
     exposedHeaders: ['X-Request-Id'],
   });

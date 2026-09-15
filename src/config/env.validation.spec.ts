@@ -1,5 +1,5 @@
 import { validateEnv } from './env.validation';
-import { resolveDatabaseUrl } from './configuration';
+import { resolveDatabaseUrl, resolvePoolMax } from './configuration';
 
 describe('validateEnv', () => {
   it('ném lỗi khi thiếu cấu hình DB', () => {
@@ -29,5 +29,13 @@ describe('resolveDatabaseUrl', () => {
         DB_NAME: 'qltb',
       } as NodeJS.ProcessEnv),
     ).toBe('postgresql://qltb:p%40ss!@localhost:5432/qltb');
+  });
+});
+
+describe('resolvePoolMax', () => {
+  it('local mặc định 5, Vercel mặc định 1, DATABASE_POOL_MAX thắng', () => {
+    expect(resolvePoolMax({})).toBe(5);
+    expect(resolvePoolMax({ VERCEL: '1' })).toBe(1);
+    expect(resolvePoolMax({ VERCEL: '1', DATABASE_POOL_MAX: '3' })).toBe(3);
   });
 });

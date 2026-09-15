@@ -20,8 +20,15 @@ export type Db = NodePgDatabase<typeof schema>;
       provide: PG_POOL,
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
+        const logger = new Logger('PgPool');
+        const connectionString = config.getOrThrow<string>('database.url');
+        if (process.env.VERCEL && !connectionString.includes('-pooler')) {
+          logger.warn(
+            'Vercel nên dùng Neon pooled URL (hostname có -pooler) để tránh hết max_connections',
+          );
+        }
         const pool = new Pool({
-          connectionString: config.getOrThrow<string>('database.url'),
+          connectionString,
           max: config.get<number>('database.poolMax'),
           // Tính cả thời gian xếp hàng chờ kết nối rảnh trong pool.
           connectionTimeoutMillis: config.get<number>('database.connectTimeoutMs'),
@@ -32,7 +39,6 @@ export type Db = NodePgDatabase<typeof schema>;
          * (DB restart, mạng rớt). Không có listener thì EventEmitter ném lỗi
          * lên tiến trình và service chết dù không có query nào đang chạy.
          */
-        const logger = new Logger('PgPool');
         pool.on('error', (error) => {
           logger.error(`kết nối rảnh trong pool bị đứt: ${error.message}`);
         });

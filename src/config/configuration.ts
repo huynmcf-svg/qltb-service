@@ -39,15 +39,23 @@ export function resolveSwaggerEnabled(env: NodeJS.ProcessEnv): boolean {
   return env.NODE_ENV !== 'production';
 }
 
+/**
+ * Vercel chạy Nest như một Function: nhiều instance, mỗi cái một Pool.
+ * Mặc định 1 kết nối — Neon free hết `max_connections` rất nhanh nếu giữ 5.
+ */
+export function resolvePoolMax(env: NodeJS.ProcessEnv = process.env): number {
+  return int(env.DATABASE_POOL_MAX, env.VERCEL ? 1 : 5);
+}
+
 export const configuration = (): AppConfig => ({
   port: int(process.env.PORT, 3400),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   database: {
     url: resolveDatabaseUrl(),
-    poolMax: int(process.env.DATABASE_POOL_MAX, 5),
+    poolMax: resolvePoolMax(),
     connectTimeoutMs: int(process.env.DATABASE_CONNECT_TIMEOUT_MS, 10_000),
   },
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:3401')
+  corsOrigins: (process.env.CORS_ORIGINS ?? '*')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),
