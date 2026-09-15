@@ -6,7 +6,6 @@ export interface AppConfig {
   port: number;
   nodeEnv: string;
   database: { url: string; poolMax: number; connectTimeoutMs: number };
-  corsOrigins: string[];
   swagger: { enabled: boolean };
   /** Giờ. Quá ngưỡng kể từ `last_seen_at` thì máy coi là offline (cảnh báo DEVICE_OFFLINE). */
   deviceOfflineAfterHours: number;
@@ -72,10 +71,6 @@ export const configuration = (): AppConfig => ({
     poolMax: resolvePoolMax(),
     connectTimeoutMs: int(process.env.DATABASE_CONNECT_TIMEOUT_MS, 10_000),
   },
-  corsOrigins: (process.env.CORS_ORIGINS ?? '*')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean),
   swagger: {
     enabled: resolveSwaggerEnabled(process.env),
   },

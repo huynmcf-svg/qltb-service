@@ -49,17 +49,11 @@ async function bootstrap() {
   app.use(cookieParser());
 
   /*
-   * CORS. `CORS_ORIGINS=*` (mặc định dev) = mở cho MỌI origin: không trả `*`
-   * thô mà phản chiếu lại origin của request (`origin: true`), vì trình duyệt
-   * từ chối `credentials: include` khi header là `*` — sau này có cookie auth
-   * vẫn chạy. Production liệt kê origin cụ thể, ngăn cách bằng dấu phẩy.
+   * CORS mở cho MỌI origin, không cấu hình. `origin: true` phản chiếu origin
+   * của request thay vì trả `*` thô — trình duyệt từ chối `credentials: include`
+   * với `*`, mà cookie refresh cần credentials.
    */
-  const corsOrigins = config.getOrThrow<string[]>('corsOrigins');
-  app.enableCors({
-    origin: corsOrigins.includes('*') ? true : corsOrigins,
-    credentials: true,
-    exposedHeaders: ['X-Request-Id'],
-  });
+  app.enableCors({ origin: true, credentials: true, exposedHeaders: ['X-Request-Id'] });
 
   if (config.getOrThrow<boolean>('swagger.enabled')) {
     setupSwagger(app);
