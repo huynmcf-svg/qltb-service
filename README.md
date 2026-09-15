@@ -37,7 +37,8 @@ Biến Production của **service**:
 | Biến | Giá trị |
 |---|---|
 | `DATABASE_URL` | Neon **pooled** (hostname có `-pooler`) |
+| `DATABASE_MIGRATE_URL` | Neon **direct** (không `-pooler`) — build Production tự migrate |
 | `CORS_ORIGINS` | `https://<qltb-web>.vercel.app` — lần đầu có thể `*` rồi siết sau |
 | `DATABASE_POOL_MAX` | không bắt buộc (Vercel mặc định 1) |
 
-Migrate Neon trên máy local (`npm run db:migrate`), không chạy trên Vercel.
+Push `main` → Vercel build Production chạy `db:migrate` rồi mới compile. Preview/PR không migrate. Log build phải có `[migrate] xong`.

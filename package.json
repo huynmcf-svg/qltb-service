@@ -6,7 +6,8 @@
     "node": "22.x"
   },
   "scripts": {
-    "build": "nest build",
+    "build": "node scripts/vercel-migrate.cjs && nest build",
+    "vercel-build": "node scripts/vercel-migrate.cjs && nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",

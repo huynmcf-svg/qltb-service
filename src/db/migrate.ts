@@ -11,8 +11,13 @@ import { resolveDatabaseUrl } from '../config/configuration';
  * `meta/_journal.json` nên chạy cả file sinh tự động lẫn file viết tay.
  */
 async function main() {
-  const url = resolveDatabaseUrl();
+  const url = process.env.DATABASE_MIGRATE_URL || resolveDatabaseUrl();
   if (!url) throw new Error('Thiếu DATABASE_URL (hoặc bộ DB_HOST / DB_USER / DB_NAME)');
+  if (url.includes('-pooler')) {
+    console.warn(
+      '[migrate] đang dùng pooled URL (hostname có -pooler). DDL có thể lỗi — đặt DATABASE_MIGRATE_URL = chuỗi Neon direct.',
+    );
+  }
 
   const pool = new Pool({ connectionString: url, max: 1 });
   try {
