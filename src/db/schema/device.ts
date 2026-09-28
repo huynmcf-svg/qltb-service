@@ -34,6 +34,9 @@ export const devices = pgTable(
     model: text('model'),
     name: text('name'),
     firmware_version: text('firmware_version'),
+    /** Nhà cung cấp — nơi sản xuất / cấp máy. Tự do, không phải doanh nghiệp trong hệ thống. */
+    supplier_name: text('supplier_name'),
+    /** Khách hàng — doanh nghiệp mua máy. NULL = chưa bán. */
     enterprise_id: uuid('enterprise_id').references(() => enterprises.enterprise_id),
     status: text('status').$type<DeviceStatus>().notNull().default('IN_STOCK'),
     /** Ngày bán — ghi lúc assign, mốc kích hoạt bảo hành. */
@@ -55,6 +58,7 @@ export const devices = pgTable(
     index('devices_status_created_idx').on(t.status, t.created_at),
     index('devices_type_idx').on(t.device_type),
     index('devices_last_seen_idx').on(t.last_seen_at),
+    index('devices_supplier_idx').on(t.supplier_name),
   ],
 );
 

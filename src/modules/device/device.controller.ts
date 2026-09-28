@@ -1,8 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Put, Query, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiParam, ApiProduces, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import type { AuthenticatedUser } from '../../common/auth/authenticated-user';
-import { CurrentUser, RequirePermissions } from '../../common/decorators';
+import { CurrentUser, NoEnvelope, RequirePermissions } from '../../common/decorators';
+import { AppException } from '../../common/errors/app.exception';
 import { requestMeta } from '../../common/request-context';
 import {
   ApiAuthErrors,
@@ -18,6 +20,7 @@ import { QuotaService } from '../quota/quota.service';
 import { EXAMPLE_USAGE_PAGE } from '../quota/dto/quota.examples';
 import { WarrantyRepository } from '../warranty/warranty.repository';
 import { EXAMPLE_WARRANTY_FULL } from '../warranty/dto/warranty.examples';
+import { buildImportTemplate, IMPORT_MAX_BYTES, IMPORT_MAX_ROWS } from './device-import';
 import { DEVICE_TYPES } from './device-type.catalog';
 import { DeviceService, type ActionContext } from './device.service';
 import { AssignDeviceDto, ChangeDeviceStatusDto, CreateDeviceDto, ListDevicesDto, UnassignDeviceDto, UpdateDeviceDto, UsageRangeDto } from './dto/device.dto';
@@ -25,9 +28,19 @@ import {
   EXAMPLE_CREATE_DEVICE,
   EXAMPLE_DEVICE,
   EXAMPLE_DEVICE_DETAIL,
+  EXAMPLE_DEVICE_IMPORT,
   EXAMPLE_DEVICE_PAGE,
   EXAMPLE_UPDATE_DEVICE,
 } from './dto/device.examples';
+
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/** Phần của file multer cần dùng — tránh kéo thêm `@types/multer`. */
+interface UploadedXlsx {
+  buffer: Buffer;
+  originalname: string;
+  size: number;
+}
 
 /**
  * Route + map DTO. Không nghiệp vụ ở đây. Đặc tả dùng PUT cho sửa (không PATCH).
@@ -54,6 +67,57 @@ export class DeviceController {
     return { items: DEVICE_TYPES };
   }
 
+  @Get('import-template')
+  @NoEnvelope()
+  @RequirePermissions('device.create')
+  @ApiProduces(XLSX)
+  @ApiOperation({
+    summary: 'Tải file Excel mẫu nhập thiết bị',
+    description:
+      'Trả file `.xlsx` (`Content-Disposition: attachment`), **không envelope**. Sheet `Thiết bị` chỉ có dòng tiêu đề ' +
+      '(cột có `(*)` là bắt buộc, mỗi tiêu đề có ghi chú cách điền); sheet `Loại thiết bị` là danh mục mã; sheet `Hướng dẫn` ' +
+      'giải thích từng cột. Người dùng điền rồi đẩy lên `POST /devices/import`. Khai TRƯỚC `/:device_id`.',
+  })
+  @ApiResponse({ status: 200, description: 'File mẫu.', content: { [XLSX]: { example: '(file .xlsx)' } } })
+  @ApiAuthErrors()
+  async importTemplate(@Res() res: Response) {
+    res.setHeader('Content-Type', XLSX);
+    res.setHeader('Content-Disposition', 'attachment; filename="mau-nhap-thiet-bi.xlsx"');
+    await buildImportTemplate().xlsx.write(res);
+    res.end();
+  }
+
+  @Post('import')
+  @HttpCode(201)
+  @RequirePermissions('device.create')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMPORT_MAX_BYTES, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Nhập thiết bị hàng loạt từ file Excel',
+    description:
+      '`multipart/form-data`, field `file` = file `.xlsx` theo mẫu `GET /devices/import-template` (tối đa 2 MB, ' +
+      `${IMPORT_MAX_ROWS} dòng). Cột nhận theo **tiêu đề**, không theo vị trí; dòng trống bỏ qua. **Tất cả hoặc không**: ` +
+      'có một dòng sai là 422 `INVALID_PAYLOAD` với `details.errors = [{ row, column, message }]` (số dòng như Excel hiển thị), ' +
+      'không lưu dòng nào. Dòng không có `Mã khách hàng` → máy `IN_STOCK`; có → gán luôn cho doanh nghiệp đó (`ACTIVE`, ' +
+      'bảo hành `SALE`) nhưng **không cấp API key** — cấp ở `POST /devices/{id}/api-key`.',
+  })
+  @ApiBody({ schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary', description: 'File .xlsx theo mẫu' } } } })
+  @ApiEnvelopeResponse({ status: 201, description: 'Đã nhập.', example: EXAMPLE_DEVICE_IMPORT })
+  @ApiEnvelopeError({ status: 400, code: 'INVALID_PAYLOAD', message: 'Thiếu cột bắt buộc: Serial. Hãy dùng đúng file mẫu', description: 'Không có file, file không phải .xlsx, thiếu cột bắt buộc, quá số dòng, hoặc không có dòng dữ liệu.', details: { missing_columns: ['Serial'] } })
+  @ApiAuthErrors()
+  @ApiUnprocessable('INVALID_PAYLOAD', 'File có 2 lỗi — chưa lưu dòng nào, sửa rồi đẩy lại', 'Có dòng sai. Danh sách lỗi (tối đa 200) ở `details.errors`.', {
+    error_count: 2,
+    errors: [
+      { row: 3, column: 'Serial', message: 'Serial đã có trong hệ thống' },
+      { row: 7, column: 'Mã khách hàng', message: 'Không có doanh nghiệp mã "DN999"' },
+    ],
+  })
+  @ApiEnvelopeError({ status: 409, code: 'DEVICE_SERIAL_CONFLICT', message: 'Có serial vừa được nhập bởi người khác — tải lại danh sách rồi thử lại', description: 'Hiếm: serial bị nhập song song giữa lúc kiểm và lúc ghi. Không dòng nào được lưu.', details: {} })
+  importDevices(@UploadedFile() file: UploadedXlsx | undefined, @CurrentUser() actor: AuthenticatedUser, @Req() req: Request) {
+    if (!file?.buffer?.length) throw AppException.invalidPayload('Chưa chọn file — gửi field `file` dạng multipart/form-data', { violations: ['file'] });
+    return this.service.importDevices(file.buffer, contextOf(actor, req));
+  }
+
   @Get()
   @RequirePermissions('device.read')
   @ApiOperation({
@@ -61,7 +125,7 @@ export class DeviceController {
     description:
       'Phân trang **cursor**: truyền lại `next_cursor` của trang trước, không tự sinh. ' +
       'Sắp theo ngày nhập kho mới nhất trước. `q` tìm gần đúng trên `serial_number` / ' +
-      '`name` / `model`. `is_online` suy từ `last_seen_at` trong 24 h — không phải một `status`. ' +
+      '`name` / `model`; `supplier_name` lọc gần đúng theo nhà cung cấp. `is_online` suy từ `last_seen_at` trong 24 h — không phải một `status`. ' +
       'Khi có auth, danh sách tự lọc theo doanh nghiệp của người gọi và chi nhánh con.',
   })
   @ApiEnvelopeResponse({ description: 'Một trang thiết bị.', example: EXAMPLE_DEVICE_PAGE })
@@ -122,7 +186,7 @@ export class DeviceController {
   @ApiOperation({
     summary: 'Sửa hồ sơ thiết bị',
     description:
-      'Chỉ sửa thông tin mô tả (`model`, `name`, `firmware_version`, `notes`). **Không** đổi ' +
+      'Chỉ sửa thông tin mô tả (`model`, `name`, `firmware_version`, `supplier_name`, `notes`). **Không** đổi ' +
       '`serial_number`, `status`, `enterprise_id` qua đây — gửi các field đó là 400. ' +
       'Chỉ gửi field cần đổi; field không gửi giữ nguyên.',
   })

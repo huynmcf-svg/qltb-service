@@ -15,8 +15,9 @@ import { QuotaRepository } from '../quota/quota.repository';
 import { QuotaService } from '../quota/quota.service';
 import { WarrantyRepository } from '../warranty/warranty.repository';
 import { nextStatus, transitionHint, type DeviceAction } from './device-state';
+import { DEFAULT_WARRANTY_MONTHS, ImportFileError, parseImportFile } from './device-import';
 import { DeviceRepository } from './device.repository';
-import type { AssignDeviceDto, ChangeDeviceStatusDto, CreateDeviceDto, DeviceDetailView, DeviceView, ListDevicesDto, UnassignDeviceDto, UpdateDeviceDto } from './dto/device.dto';
+import type { AssignDeviceDto, ChangeDeviceStatusDto, CreateDeviceDto, DeviceDetailView, DeviceImportResult, DeviceView, ListDevicesDto, UnassignDeviceDto, UpdateDeviceDto } from './dto/device.dto';
 
 /** Ngữ cảnh của một thao tác — actor từ token, meta từ request. */
 export type ActionContext = Ctx;
@@ -63,6 +64,89 @@ export class DeviceService {
     this.logger.info('device registered', { request_id: ctx.request_id, user_id: ctx.actor.user_id, device_id, serial_number: dto.serial_number });
     await this.audit.record({ module: 'device', action: AUDIT_ACTIONS.DEVICE_CREATE, resource_type: 'device', resource_id: device_id, actor: actorOf(ctx), new_values: { ...dto, status: 'IN_STOCK' }, ...meta(ctx) });
     return this.get(device_id, ctx.actor);
+  }
+
+  /**
+   * Nhập hàng loạt từ file Excel. Kiểm HẾT rồi mới ghi: chỉ cần một dòng sai
+   * (định dạng, trùng serial trong file / trong hệ thống, mã khách hàng không
+   * có) là 422 kèm danh sách lỗi theo dòng, không lưu dòng nào. Dòng có mã
+   * khách hàng được gán luôn (`ACTIVE` + bảo hành `SALE`) nhưng KHÔNG cấp API
+   * key — key chỉ hiện một lần, admin cấp ở trang chi tiết khi lắp máy.
+   */
+  async importDevices(file: Buffer, ctx: ActionContext): Promise<DeviceImportResult> {
+    assertSystemAdmin(ctx.actor, 'nhập được thiết bị vào kho');
+    let parsed: Awaited<ReturnType<typeof parseImportFile>>;
+    try {
+      parsed = await parseImportFile(file);
+    } catch (error) {
+      if (error instanceof ImportFileError) throw AppException.invalidPayload(error.message, error.details);
+      throw error;
+    }
+    const { rows } = parsed;
+    const errors = [...parsed.errors];
+    if (!rows.length && !errors.length) throw AppException.invalidPayload('File không có dòng dữ liệu nào', {});
+
+    const firstRow = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.serial_number) continue;
+      const seen = firstRow.get(r.serial_number);
+      if (seen !== undefined) errors.push({ row: r.row, column: 'Serial', message: `Trùng serial với dòng ${seen} trong file` });
+      else firstRow.set(r.serial_number, r.row);
+    }
+    const existing = new Set(await this.repo.existingSerials([...firstRow.keys()]));
+    for (const r of rows) if (existing.has(r.serial_number) && firstRow.get(r.serial_number) === r.row) errors.push({ row: r.row, column: 'Serial', message: 'Serial đã có trong hệ thống' });
+
+    const codes = [...new Set(rows.flatMap((r) => (r.customer_code ? [r.customer_code.toUpperCase()] : [])))];
+    const customers = new Map((await this.enterprises.findByCodes(codes)).map((e) => [e.code.toUpperCase(), e]));
+    for (const r of rows) {
+      if (!r.customer_code) continue;
+      const customer = customers.get(r.customer_code.toUpperCase());
+      if (!customer) errors.push({ row: r.row, column: 'Mã khách hàng', message: `Không có doanh nghiệp mã "${r.customer_code}"` });
+      else if (customer.status !== 'ACTIVE') errors.push({ row: r.row, column: 'Mã khách hàng', message: `Doanh nghiệp "${customer.code}" đang bị đình chỉ` });
+    }
+
+    if (errors.length) {
+      errors.sort((a, b) => a.row - b.row);
+      throw AppException.unprocessable(ErrorCode.INVALID_PAYLOAD, `File có ${errors.length} lỗi — chưa lưu dòng nào, sửa rồi đẩy lại`, {
+        error_count: errors.length,
+        errors: errors.slice(0, 200),
+      });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const items = rows.map((r) => {
+      const { row: _row, customer_code, sold_at, warranty_months, ...fields } = r;
+      const customer = customer_code ? customers.get(customer_code.toUpperCase()) : undefined;
+      if (!customer) return { device: { ...fields, status: 'IN_STOCK' as const } };
+      const sold = sold_at ?? today;
+      const months = warranty_months ?? DEFAULT_WARRANTY_MONTHS;
+      return {
+        device: { ...fields, status: 'ACTIVE' as const, enterprise_id: customer.enterprise_id, sold_at: sold, assigned_at: now },
+        warranty: months > 0 ? { enterprise_id: customer.enterprise_id, start_date: sold, end_date: addMonths(sold, months), source: 'SALE' as const, created_by: ctx.actor.user_id } : undefined,
+      };
+    });
+
+    let created: Awaited<ReturnType<DeviceRepository['createMany']>>;
+    try {
+      created = await this.repo.createMany(items);
+    } catch (error) {
+      // Máy khác vừa nhập cùng serial giữa lúc kiểm và lúc ghi.
+      if (uniqueViolation(error) === 'devices_serial_number_key') {
+        throw AppException.conflict(ErrorCode.DEVICE_SERIAL_CONFLICT, 'Có serial vừa được nhập bởi người khác — tải lại danh sách rồi thử lại', {});
+      }
+      throw error;
+    }
+
+    const assigned = created.filter((d) => d.enterprise_id).length;
+    this.logger.info('devices imported', { request_id: ctx.request_id, user_id: ctx.actor.user_id, count: created.length, assigned });
+    await this.audit.record({ module: 'device', action: 'DEVICE_IMPORT', resource_type: 'device', actor: actorOf(ctx), new_values: { count: created.length, assigned, serial_numbers: created.map((d) => d.serial_number).slice(0, 1000) }, ...meta(ctx) });
+    return {
+      imported: created.length,
+      in_stock: created.length - assigned,
+      assigned,
+      items: created.map((d, i) => ({ row: rows[i]!.row, device_id: d.device_id, serial_number: d.serial_number, status: d.status })),
+    };
   }
 
   async update(device_id: string, dto: UpdateDeviceDto, ctx: ActionContext): Promise<DeviceDetailView> {

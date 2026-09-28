@@ -26,6 +26,13 @@ export class ListDevicesDto extends CursorPaginationDto {
   @IsIn(DEVICE_STATUSES)
   status?: DeviceStatus;
 
+  /** Lọc gần đúng theo nhà cung cấp. */
+  @ApiPropertyOptional({ maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  supplier_name?: string;
+
   /** Tìm theo `serial_number` / `name` / `model`, không phân biệt hoa thường. */
   @ApiPropertyOptional({ maxLength: 100 })
   @IsOptional()
@@ -65,6 +72,13 @@ export class CreateDeviceDto {
   @MaxLength(50)
   firmware_version?: string;
 
+  /** Nhà cung cấp — nơi sản xuất / cấp máy. */
+  @ApiPropertyOptional({ example: 'Công ty TNHH Thiết bị số Việt' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  supplier_name?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -92,6 +106,13 @@ export class UpdateDeviceDto {
   @MaxLength(50)
   firmware_version?: string;
 
+  /** Nhà cung cấp — nơi sản xuất / cấp máy. */
+  @ApiPropertyOptional({ example: 'Công ty TNHH Thiết bị số Việt' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  supplier_name?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -107,6 +128,9 @@ export interface DeviceView {
   model: string | null;
   name: string | null;
   firmware_version: string | null;
+  /** Nhà cung cấp (nơi sản xuất / cấp máy). */
+  supplier_name: string | null;
+  /** Khách hàng — doanh nghiệp đã mua máy. */
   enterprise_id: string | null;
   enterprise_name: string | null;
   status: DeviceStatus;
@@ -176,4 +200,12 @@ export class ChangeDeviceStatusDto {
 export class UsageRangeDto extends CursorPaginationDto {
   @ApiPropertyOptional({ format: 'date-time' }) @IsOptional() @IsDateString() from?: string;
   @ApiPropertyOptional({ format: 'date-time' }) @IsOptional() @IsDateString() to?: string;
+}
+
+/** Kết quả `POST /devices/import`. `items` theo thứ tự dòng trong file. */
+export interface DeviceImportResult {
+  imported: number;
+  in_stock: number;
+  assigned: number;
+  items: Array<{ row: number; device_id: string; serial_number: string; status: DeviceStatus }>;
 }

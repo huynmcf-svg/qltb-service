@@ -29,6 +29,13 @@
       "when": 1789461512943,
       "tag": "0003_idempotency_apikey_allocation",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789461513943,
+      "tag": "0004_device_supplier",
+      "breakpoints": true
     }
   ]
 }

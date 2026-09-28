@@ -16,6 +16,7 @@ type DeviceRow = typeof devices.$inferSelect;
 type DeviceInsert = typeof devices.$inferInsert;
 type QuotaRow = typeof device_quotas.$inferSelect;
 type WarrantyRow = typeof warranties.$inferSelect;
+type WarrantyInsert = typeof warranties.$inferInsert;
 
 /** Quá ngưỡng này kể từ `last_seen_at` thì coi là offline. Chưa chốt — 24 h. */
 export const OFFLINE_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -42,6 +43,7 @@ export class DeviceRepository {
       query.enterprise_id ? eq(devices.enterprise_id, query.enterprise_id) : undefined,
       query.device_type ? eq(devices.device_type, query.device_type) : undefined,
       query.status ? eq(devices.status, query.status) : undefined,
+      query.supplier_name ? ilike(devices.supplier_name, `%${escapeLike(query.supplier_name)}%`) : undefined,
       query.q
         ? or(
             ilike(devices.serial_number, `%${escapeLike(query.q)}%`),
@@ -121,6 +123,37 @@ export class DeviceRepository {
     });
   }
 
+  /** Serial đã có trong hệ thống, trong số `serials` truyền vào. */
+  async existingSerials(serials: string[]): Promise<string[]> {
+    if (!serials.length) return [];
+    const rows = await this.db.select({ serial_number: devices.serial_number }).from(devices).where(inArray(devices.serial_number, serials));
+    return rows.map((r) => r.serial_number);
+  }
+
+  /**
+   * Nhập hàng loạt trong MỘT transaction: máy + dòng quota rỗng + bảo hành
+   * (nếu có). Một dòng hỏng là rollback cả lô. Lỗi 23505 để lọt lên service.
+   */
+  async createMany(items: Array<{ device: DeviceInsert; warranty?: Omit<WarrantyInsert, 'device_id'> }>): Promise<DeviceRow[]> {
+    return this.db.transaction(async (tx) => {
+      const out: DeviceRow[] = [];
+      // Chia lô để không vượt giới hạn tham số của Postgres (65 535).
+      for (let i = 0; i < items.length; i += 200) {
+        const chunk = items.slice(i, i + 200);
+        const rows = await tx.insert(devices).values(chunk.map((c) => c.device)).returning();
+        const bySerial = new Map(rows.map((r) => [r.serial_number, r]));
+        await tx.insert(device_quotas).values(rows.map((r) => ({ device_id: r.device_id })));
+        const ws = chunk.flatMap((c) => {
+          const row = bySerial.get(c.device.serial_number);
+          return c.warranty && row ? [{ ...c.warranty, device_id: row.device_id }] : [];
+        });
+        if (ws.length) await tx.insert(warranties).values(ws);
+        out.push(...chunk.map((c) => bySerial.get(c.device.serial_number)!));
+      }
+      return out;
+    });
+  }
+
   async update(device_id: string, patch: Partial<DeviceInsert>): Promise<DeviceRow | null> {
     const [row] = await this.db.update(devices).set(patch).where(eq(devices.device_id, device_id)).returning();
     return row ?? null;
@@ -193,6 +226,7 @@ export function toView(row: DeviceRow, enterprise_name: string | null, now = Dat
     model: row.model,
     name: row.name,
     firmware_version: row.firmware_version,
+    supplier_name: row.supplier_name,
     enterprise_id: row.enterprise_id,
     enterprise_name,
     status: row.status,

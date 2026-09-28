@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, eq, ilike, isNull, or, sql } from 'drizzle-orm';
+import { and, count, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { scopeCondition } from '../../common/auth/scope';
 import { cursorOrder, cursorWhere, defined, likePattern, pageLimit, toPage } from '../../common/dto/cursor-page';
@@ -60,6 +60,12 @@ export class EnterpriseRepository {
   async findRaw(enterprise_id: string): Promise<Row | null> {
     const [row] = await this.db.select().from(enterprises).where(eq(enterprises.enterprise_id, enterprise_id)).limit(1);
     return row ?? null;
+  }
+
+  /** Tra theo mã, không phân biệt hoa thường — dùng khi nhập thiết bị từ Excel. */
+  async findByCodes(codes: string[]): Promise<Row[]> {
+    if (!codes.length) return [];
+    return this.db.select().from(enterprises).where(inArray(sql`upper(${enterprises.code})`, codes.map((c) => c.toUpperCase())));
   }
 
   async branches(enterprise_id: string): Promise<EnterpriseView[]> {

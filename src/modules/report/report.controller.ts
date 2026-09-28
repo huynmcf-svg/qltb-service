@@ -56,7 +56,7 @@ export class ReportController {
     assertXlsx(query.format);
     const rows = await collect((cursor) => this.devices.list({ ...query, cursor, limit: 200 }, actor.scope));
     await send(res, 'thiet-bi', 'Thiết bị', [
-      ['Serial', 'serial_number', 20], ['Loại', 'device_type', 12], ['Model', 'model', 14], ['Tên', 'name', 24], ['Doanh nghiệp', 'enterprise_name', 28],
+      ['Serial', 'serial_number', 20], ['Loại', 'device_type', 12], ['Model', 'model', 14], ['Tên', 'name', 24], ['Nhà cung cấp', 'supplier_name', 28], ['Khách hàng', 'enterprise_name', 28],
       ['Trạng thái', 'status', 14], ['Ngày bán', 'sold_at', 12], ['Lần cuối thấy', 'last_seen_at', 22], ['Firmware', 'firmware_version', 10], ['Ghi chú', 'notes', 30],
     ], rows);
   }

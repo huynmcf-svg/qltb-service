@@ -11,6 +11,7 @@ export const EXAMPLE_CREATE_DEVICE = {
   model: 'SP-200',
   name: 'Máy ký số quầy 1',
   firmware_version: '1.4.2',
+  supplier_name: 'Công ty TNHH Thiết bị số Việt',
 } as const;
 
 /** Vừa nhập kho — chưa gán, quota rỗng. */
@@ -80,4 +81,14 @@ export const EXAMPLE_UPDATE_DEVICE = {
 export const EXAMPLE_DEVICE_PAGE = {
   items: [EXAMPLE_DEVICE_ACTIVE, EXAMPLE_DEVICE],
   next_cursor: EX.cursor,
+};
+
+export const EXAMPLE_DEVICE_IMPORT = {
+  imported: 2,
+  in_stock: 1,
+  assigned: 1,
+  items: [
+    { row: 2, device_id: EX.device_id, serial_number: EX.serial_number, status: 'IN_STOCK' },
+    { row: 3, device_id: '7c1e2f4a-9b3d-4e6f-8a1b-2c3d4e5f6a7b', serial_number: 'QLTB-24-000124', status: 'ACTIVE' },
+  ],
 };
